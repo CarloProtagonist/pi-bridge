@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0f1115">
+<title>pi bridge</title>
+<style>
+:root{
+ --bg:#0f1115; --panel:#171a21; --panel2:#1c2027; --line:#262b35;
+ --fg:#e6e9ef; --dim:#8b93a1; --acc:#6ea8fe; --good:#3fb950; --warn:#d29922; --err:#f85149; --th:#8957c9; --tool:#3d8bb5;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;height:100dvh;background:var(--bg);color:var(--fg);
+ font:16px/1.45 -apple-system,system-ui,Segoe UI,Roboto,sans-serif}
+#app{display:flex;flex-direction:column;height:100dvh;max-width:860px;margin:0 auto}
+#topbar{display:flex;gap:8px;align-items:center;padding:8px 10px;background:var(--panel);
+ border-bottom:1px solid var(--line);flex-wrap:wrap;row-gap:6px}
+#topbar .btns{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;max-width:60%;row-gap:6px}
+#topbar .dot{width:9px;height:9px;border-radius:50%;background:var(--dim);flex:none}
+#topbar .dot.on{background:var(--good)}
+#topbar .dot.run{background:var(--acc);animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.35}}
+#model{font-size:12px;color:var(--dim);flex:1 1 40px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#sess{font-size:12px;color:var(--dim);max-width:34vw;flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+button{font:inherit;background:var(--panel2);color:var(--fg);border:1px solid var(--line);
+ border-radius:8px;padding:5px 10px;cursor:pointer;touch-action:manipulation;min-width:0}
+button:active{opacity:.6}
+button.danger{border-color:#5c2b2b;color:var(--err)}
+button:disabled{opacity:.4;cursor:default}
+#chat{flex:1;overflow-y:auto;overscroll-behavior:contain;padding:10px;-webkit-overflow-scrolling:touch}
+.msg{margin:0 0 10px;display:flex;min-width:0}
+.msg .body{max-width:85%;padding:8px 12px;border-radius:14px;background:var(--panel);
+ border:1px solid var(--line);overflow-wrap:break-word;word-break:break-word}
+.msg.meta .body{max-width:100%;background:transparent;border-color:transparent;color:var(--dim);font-size:12px}
+.msg.user{justify-content:flex-end}
+.msg.user .body{background:#1e2b45;border-color:#2b3d61;border-bottom-right-radius:4px}
+.msg.assistant .body{border-bottom-left-radius:4px}
+.msg .who{font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--dim);margin-bottom:3px}
+.md{white-space:pre-wrap;font-size:15px}
+.md pre{background:#11141a;padding:8px;border:1px solid var(--line);border-radius:8px;
+ overflow-x:auto;font-size:12px;margin:4px 0}
+.md pre code,.md .mono{font-family:ui-monospace,Menlo,monospace}
+.think{margin:6px 0;font-size:12px;border-left:3px solid var(--th);padding:2px 8px;
+ color:#b9a1dd;background:#17121d;border-radius:0 8px 8px 0}
+.think .h{color:var(--th);font-weight:600;cursor:pointer;user-select:none}
+.think .txt{white-space:pre-wrap;color:#a99bc4;font-family:ui-monospace,Menlo,monospace;display:none}
+.think.open .txt{display:block}
+.tool{margin:6px 0;font-size:12px;border-left:3px solid var(--tool);padding:4px 8px;
+ background:#111a22;color:#9fc4dc;border-radius:0 8px 8px 0}
+.tool .h{font-weight:600;color:var(--tool);cursor:pointer;font-family:ui-monospace,Menlo,monospace}
+.tool .a,.tool .r{white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace;font-size:11px;
+ color:#7d95a8;display:none;margin-top:2px}
+.tool.open .a,.tool.open .r{display:block}
+.tool .a{max-height:120px;overflow:auto}
+.tool .r{max-height:200px;overflow:auto}
+.tool .r.err{color:var(--err)}
+#composer{display:flex;gap:8px;padding:8px 8px max(8px,env(safe-area-inset-bottom));background:var(--panel);border-top:1px solid var(--line);flex:none;align-items:flex-end}
+#input{flex:1;resize:none;max-height:140px;background:var(--bg);color:var(--fg);
+ border:1px solid var(--line);border-radius:12px;padding:9px 12px;font:inherit}
+#input:focus{outline:none;border-color:var(--acc)}
+#send{align-self:flex-end}
+#toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:#000d;
+ border:1px solid var(--line);padding:6px 14px;border-radius:20px;font-size:13px;
+ opacity:0;pointer-events:none;transition:opacity .2s;max-width:80vw;z-index:8}
+#toast.show{opacity:1}
+#tabs{display:flex;background:var(--panel);border-top:1px solid var(--line);flex:none;padding-bottom:max(0px,env(safe-area-inset-bottom))}
+#tabs button{flex:1;border:0;border-radius:0;border-bottom:2px solid transparent;padding:8px 6px;font-size:13px;background:transparent;display:flex;gap:6px;align-items:center;justify-content:center;white-space:nowrap}
+#tabs button.act{border-bottom-color:var(--acc);color:var(--acc);font-weight:600}
+#views{position:relative;overflow:hidden;flex:1 1 0%;min-height:0;display:flex;flex-direction:column}
+.view{position:absolute;inset:0;overflow:hidden;display:flex;flex-direction:column}
+.view[hidden]{display:none}
+.notif{margin:10px 10px 0;padding:8px 12px;border-left:3px solid var(--warn);background:#221c10;border-radius:0 10px 10px 0;cursor:pointer;font-size:14px}
+.notif .t{font-weight:600;color:var(--warn)}
+.notif .x{color:var(--dim);font-size:12px;margin-top:2px;white-space:pre-wrap;overflow-wrap:anywhere}
+.mirror{margin:8px 10px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px}
+.mirror .h{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px}
+.mirror .h .sp{flex:1}
+.mirror .row{padding:6px 0;border-top:1px solid var(--line);font-size:13px;display:flex;gap:8px;white-space:pre-wrap;overflow-wrap:anywhere}
+.mirror .row .r{font-size:10px;color:var(--dim);min-width:26px;text-transform:uppercase;font-weight:700;padding-top:2px}
+.mirror .row.you .r{color:var(--acc)}
+.mirror .row.pi .r{color:var(--good)}
+.slist{flex:1;overflow-y:auto;overscroll-behavior:contain;padding:10px;-webkit-overflow-scrolling:touch}
+.sproj{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin:14px 4px 6px;overflow-wrap:anywhere}
+.sitem{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:9px 11px;margin-bottom:8px;cursor:pointer}
+.sitem .tt{font-size:14px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.sitem .mt{font-size:11px;color:var(--dim);margin-top:3px;display:flex;gap:10px;flex-wrap:wrap}
+.sitem.live{border-color:var(--good)}
+.sitem.live .mt b{color:var(--good)}
+.sfoot{display:flex;gap:6px;align-items:center;margin-top:8px}
+.fbtn{flex:1;font-size:12px;font-weight:600;padding:6px 10px;border-radius:9px;border:1px solid var(--line);background:var(--panel2);color:var(--fg);cursor:pointer;touch-action:manipulation}
+.fbtn:active{opacity:.7}
+.fbtn[disabled]{opacity:.5}
+.fbtn.ghost{flex:0 0 auto;border-style:dashed;color:var(--dim)}
+.fbtn.dangerb{border-color:#5c2b2b;color:var(--err);border-style:solid}
+.mviewwrap{flex:1;overflow-y:auto;overscroll-behavior:contain;padding:46px 10px 10px;-webkit-overflow-scrolling:touch}
+.mv-back{position:absolute;top:8px;left:8px;z-index:3;padding:4px 10px}
+.mv-title{font-size:12px;color:var(--dim);padding:6px 2px 8px;overflow-wrap:anywhere;line-height:1.5;display:flex;gap:8px;align-items:flex-start}
+.mv-title .tt{flex:1}
+#mvgobtn{flex:0 0 auto;font-size:12px;font-weight:700;border-color:#2b4b2f;background:#14291a;color:var(--good);border-radius:9px;padding:5px 10px;touch-action:manipulation}
+#badge{background:var(--err);color:#fff;border-radius:8px;font-size:10px;padding:0 5px;font-weight:700;margin-left:4px}
+#badge[hidden]{display:none}
+#auth{position:fixed;inset:0;background:var(--bg);z-index:9;display:flex;align-items:center;
+ justify-content:center;padding:20px}
+#auth[hidden]{display:none}
+#auth .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;
+ padding:24px;max-width:340px;width:100%;text-align:center}
+#auth input{width:100%;margin:12px 0;padding:10px;background:var(--bg);color:var(--fg);
+ border:1px solid var(--line);border-radius:10px;font:inherit}
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+</style>
+</head>
+<body>
+<div id="app">
+<div id="topbar">
+<span id="statusdot" class="dot"></span>
+<span id="model">connecting…</span>
+<span id="sess"></span>
+<span class="btns">
+<button id="lvlbtn" title="thinking level">?</button>
+<button id="newbtn">new</button>
+<button id="abbtn" class="danger">stop</button>
+<button id="pushbtn" title="get web-push notifications on this device.\n(reliable fallback: any ntfy app / pushbullet / curl subscribed to this server's pibridge topic: http://100.121.26.79:3333/")>🔔</button>
+</span>
+</div>
+<div id="views">
+<div id="v-chat" class="view">
+<div id="notifs"></div>
+<div id="chat"></div>
+<form id="composer">
+<textarea id="input" rows="1" placeholder="message… (ctrl/shift+enter sends multiline)"></textarea>
+<button id="send">send</button>
+</form>
+</div>
+<div id="v-sess" class="view" hidden>
+<div id="slist" class="slist"></div>
+</div>
+<div id="v-mview" class="view" hidden>
+<button id="mvback" class="mv-back">← sessions</button>
+<div class="mv-title" id="mvtitle"><span class="tt"></span><button id="mvgobtn" type="button">↩ reply here</button></div>
+<div id="mchat" class="mviewwrap"></div>
+</div>
+</div>
+<div id="tabs">
+<button id="tab-chat" class="act">💬 chat</button>
+<button id="tab-sess">🗂 sessions <span id="badge" hidden>1</span></button>
+</div>
+</div>
+<div id="toast"></div>
+<div id="auth" hidden><div class="card"><h3 style="margin:0 0 6px">pi bridge</h3><p style="color:var(--dim);font-size:13px">Enter token (on the machine: ~/.config/pibridge/token):</p><input id="token" type="password" autocomplete="off" placeholder="token"><button id="tokengo" style="width:100%">connect</button><p style="color:var(--err);font-size:12px;margin-top:8px" id="autherr"></p></div></div>
+<script id="boot">fetch("/app.bundle.js.sha256").then(r=>r.text()).then(xv=>{var s=document.createElement("script");s.src="/app.bundle.js?h="+xv.trim();window.BUNDLE=xv.trim();document.head.appendChild(s)}).catch(()=>{document.title="BOOT FAIL: cannot load app.js"})</script>
+<div id="freshcan" hidden></div>
+</body>
+</html>

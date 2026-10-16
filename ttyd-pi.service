@@ -1,0 +1,16 @@
+[Unit]
+Description=ttyd terminal bridge for crispy (tailnet, writable shell)
+After=network-online.target tailscaled.service
+
+[Service]
+User=crispy
+WorkingDirectory=/home/crispy
+Environment=HOME=/home/crispy
+# -W = writable. -i 100.121.26.79 = tailnet-only.
+# bash --login reads ~/.profile (adds pi/agent/bin to PATH) and drops to a normal shell.
+# NOTE: -w means "working directory" in ttyd — do not put it where you meant "writable".
+ExecStart=/usr/bin/ttyd -W -i 100.121.26.79 -p 8788 -t fontSize=14 -t cursorBlink=true /usr/bin/bash --login
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
