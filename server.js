@@ -33,6 +33,101 @@ const WEBPUSH = require("./webpush.js");
 const HOME = os.homedir();
 const TOKEN_FILE = path.join(HOME, ".config/pibridge/token");
 const VAPID_FILE = path.join(HOME, ".config/pibridge/vapid.json");
+
+// ------------------------------------------------------------------ per-project agent files
+// Each pi project can live at its root two markdown files that agents read:
+//   agent_instructions.md  — standing rules for agents working in that project
+//   agent_backlog.md        — the ticket backlog
+// We let the phone UI show whether they exist, create them from a (user-editable)
+// template and edit them in place. A project's real folder (its cwd) is taken from
+// the first line of any session .jsonl under ~/.pi/agent/sessions/<dir>/ — that is
+// authoritative and avoids ambiguity from the dash-encoded directory names.
+const AGENT_SESSIONS_DIR = path.join(HOME, ".pi", "agent", "sessions");
+const AGENT_TEMPLATES_STORE = path.join(HOME, ".config", "pibridge", "templates.json");
+const AGENT_FILE_KEYS = { instructions: "agent_instructions.md", backlog: "agent_backlog.md" };
+
+const AGENT_DEFAULT_TEMPLATES = {
+  instructions: [
+    "# Agent Instructions",
+    "",
+    "Standing rules for any agent working in this project. Read these fully before acting.",
+    "",
+    "1. Read before you write — look at the relevant files and code before changing anything.",
+    "2. Small, testable steps — break the work into subtasks and do them one at a time.",
+    "3. Test before you close — run whatever verifies the change (build, tests, or a manual check) before marking a ticket done.",
+    "4. Keep the backlog current — track work in `agent_backlog.md` and move tickets as they progress.",
+    "5. If blocked, say so — describe what is stuck and the options, and stop instead of guessing at anything irreversible.",
+    "",
+  ].join("\n"),
+  backlog: [
+    "# Agent Backlog",
+    "",
+    "One line per ticket. Move an item between the sections as its state changes.",
+    "Use: `[ ]` not started · `[~]` in progress · `[x]` done. Prefix priority when it matters (P0/P1).",
+    "",
+    "## Backlog",
+    "_Future and not-yet-scheduled work._",
+    "- [ ] ",
+    "",
+    "## Current Sprint",
+    "_The small set of things committed for this sprint._",
+    "- [ ] ",
+    "",
+    "## Done",
+    "_Finished and verified (add a date when you complete one)._",
+    "- [x] ",
+    "",
+  ].join("\n"),
+};
+
+function agentLoadTemplates() {
+  const t = { instructions: AGENT_DEFAULT_TEMPLATES.instructions, backlog: AGENT_DEFAULT_TEMPLATES.backlog };
+  try {
+    const o = JSON.parse(fs.readFileSync(AGENT_TEMPLATES_STORE, "utf8"));
+    if (typeof o.instructions === "string" && o.instructions.trim() !== "") t.instructions = o.instructions;
+    if (typeof o.backlog === "string" && o.backlog.trim() !== "") t.backlog = o.backlog;
+  } catch (_) { /* first run or absent — use defaults */ }
+  return t;
+}
+const AGENT_TEMPLATES = agentLoadTemplates();
+function agentSaveTemplates() {
+  try {
+    fs.mkdirSync(path.dirname(AGENT_TEMPLATES_STORE), { recursive: true });
+    fs.writeFileSync(AGENT_TEMPLATES_STORE, JSON.stringify(AGENT_TEMPLATES, null, 2) + "\n", "utf8");
+    return true;
+  } catch (_) { return false; }
+}
+
+// Map a session directory name to the real project folder (the pi cwd).
+function agentResolveProject(dirName) {
+  if (typeof dirName !== "string" || !/^[-+.A-Za-z0-9]+$/.test(dirName)) return null;
+  const dd = path.join(AGENT_SESSIONS_DIR, dirName);
+  let cwd = null;
+  let files = [];
+  try { files = fs.readdirSync(dd).filter(f => f.endsWith(".jsonl")).sort(); }
+  catch (_) { return null; }
+  for (const f of files) {
+    try {
+      const fd = fs.openSync(path.join(dd, f), "r");
+      const buf = Buffer.alloc(2048);
+      const n = fs.readSync(fd, buf, 0, buf.length, 0);
+      fs.closeSync(fd);
+      const first = buf.toString("utf8").slice(0, 8000).split("\n")[0];
+      try { const o = JSON.parse(first); if (o.cwd) { cwd = o.cwd; break; } } catch (_) {}
+    } catch (_) {}
+  }
+  if (!cwd) return null; // only ever resolve what we can prove is a directory
+  try { if (!fs.statSync(cwd).isDirectory()) return null; } catch (_) { return null; }
+  return cwd;
+}
+function agentProjectCwdOrReply(res, dirName) {
+  const cwd = agentResolveProject(dirName);
+  if (!cwd) { sendJson(res, 404, { error: "project directory not found on PC" }); return null; }
+  return cwd;
+}
+function agentFileExists(cwd, key) {
+  try { return fs.statSync(path.join(cwd, AGENT_FILE_KEYS[key])).isFile(); } catch (_) { return false; }
+}
 const SUBS_FILE = path.join(HOME, ".config/pibridge/push-subscriptions.json");
 const HTTPS_PORT = Number(process.env.PIBRIDGE_HTTPS_PORT || 8443);
 const CERT = process.env.PIBRIDGE_CERT || null;
@@ -705,6 +800,56 @@ async function handleApi(req, res, baseUrl) {
     const meta = readHead().find(x => x.file === rel) || {};
     sendJson(res, 200, { file: rel, project: meta.project || null, title: meta.title || null, messages: msgs });
     return;
+  }
+  // ---- per-project agent files (agent_instructions.md / agent_backlog.md) ----
+  if (p === "/api/agent-templates") {
+    if (req.method === "POST") {
+      return readBody(req).then(t => {
+        let b = {}; try { b = JSON.parse(t || "{}"); } catch (_) { return sendJson(res, 400, { error: "bad json" }); }
+        for (const k of Object.keys(AGENT_FILE_KEYS)) {
+          if (typeof b[k] !== "string") return sendJson(res, 400, { error: "template."+k+" required (string)" });
+          AGENT_TEMPLATES[k] = b[k].slice(0, 200000);
+        }
+        if (!agentSaveTemplates()) return sendJson(res, 500, { error: "could not save templates on disk" });
+        console.error("[pibridge] agent templates updated");
+        return sendJson(res, 200, { ok: true, templates: AGENT_TEMPLATES });
+      });
+    }
+    return sendJson(res, 200, { templates: AGENT_TEMPLATES });
+  }
+  if (p === "/api/agent-files") {
+    const urlq = url.searchParams;
+    const k = urlq.get("key");
+    const d = urlq.get("dir");
+    if (!AGENT_FILE_KEYS[k]) return sendJson(res, 400, { error: "unknown file key (use 'instructions' or 'backlog')" });
+    if (req.method === "GET") {
+      const cwd = agentProjectCwdOrReply(res, d);
+      if (!cwd) return;
+      const file = path.join(cwd, AGENT_FILE_KEYS[k]);
+      let exists = false, content = "";
+      try { exists = fs.statSync(file).isFile(); } catch (_) {}
+      if (exists) {
+        try { content = fs.readFileSync(file, "utf8").slice(0, 1000000); }
+        catch (e) { return sendJson(res, 500, { error: "read failed: " + (e.message || e) }); }
+      }
+      return sendJson(res, 200, { key: k, file: AGENT_FILE_KEYS[k], exists, content, cwd });
+    }
+    if (req.method === "POST") {
+      return readBody(req).then(t => {
+        let b = {}; try { b = JSON.parse(t || "{}"); } catch (_) { return sendJson(res, 400, { error: "bad json" }); }
+        const cwd = agentProjectCwdOrReply(res, d);
+        if (!cwd) return;
+        const fromTpl = !!b.fromTemplate;
+        const content = (fromTpl ? AGENT_TEMPLATES[k] : String(b.content == null ? "" : b.content)).slice(0, 1000000);
+        const fPath = path.join(cwd, AGENT_FILE_KEYS[k]);
+        try {
+          fs.writeFileSync(fPath, content, "utf8");
+        } catch (e) { return sendJson(res, 500, { error: "write failed: " + (e.message || e) }); }
+        console.error("[pibridge] saved " + fPath + (fromTpl ? " (from template)" : ""));
+        return sendJson(res, 200, { ok: true, exists: true, file: AGENT_FILE_KEYS[k], cwd });
+      });
+    }
+    return sendJson(res, 405, { error: "method not allowed" });
   }
   if (p === "/api/test-notify" && req.method === "GET") {
     addNotif("pi (PC) → test notification", "Notification pipeline is working. " + new Date().toLocaleTimeString());
