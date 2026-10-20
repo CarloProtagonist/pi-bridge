@@ -217,7 +217,10 @@ const postLevel = async (req, res, ctx) => {
 async function handleApi(req, res, baseUrl, ctx) {
   const url = new URL(req.url, baseUrl);
   const p = url.pathname === '/' ? '/p/' + PAGE_VER : url.pathname;
-  if (url.pathname === '/' || url.pathname === '/p/' || url.pathname === '/p/' + PAGE_VER + '/') {
+  // stale /p/<OLD_VER> bookmarks (from a previous page build): redirect to the
+  // current page instead of 404ing. Old URLs may still be bookmarked on phones.
+  if (url.pathname === '/' || url.pathname === '/p/' ||
+      (/^\/p\/[^/]+$/.test(url.pathname) && url.pathname !== '/p/' + PAGE_VER)) {
     const q = url.search ? url.search : '';
     res.writeHead(302, { 'location': '/p/' + PAGE_VER + q, 'cache-control': 'no-store' });
     return res.end();
