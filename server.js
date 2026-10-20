@@ -718,7 +718,7 @@ async function handleApi(req, res, baseUrl) {
   const p = url.pathname === "/" ? "/p/" + PAGE_VER : url.pathname;
   if (url.pathname === "/" || url.pathname === "/p/" || url.pathname === "/p/" + PAGE_VER + "/") { const q = url.search ? url.search : ""; res.writeHead(302, { "location": "/p/" + PAGE_VER + q, "cache-control": "no-store" }); return res.end(); }
   const api = p.startsWith("/api/");
-  if (api && p !== "/api/health" && p !== "/api/push/vapid-key" && !isAuthed(req, url)) {
+  if (api && p !== "/api/health" && p !== "/api/push/vapid-key" && p !== "/api/diag" && !isAuthed(req, url)) {
     return sendJson(res, 403, { error: "bad token" });
   }
   if (p === "/api/diag" && req.method === "POST") {
@@ -868,17 +868,33 @@ async function handleApi(req, res, baseUrl) {
   }
   if (api) { res.writeHead(404, { "content-type": "text/plain" }); return res.end("not found"); }
   res.writeHead(404, { "content-type": "text/html; charset=utf-8" });
-  res.end("<!doctype html><meta charset=utf-8><title>404</title><body style=\"background:#0f1115;color:#e6e9ef;font:16px system-ui;display:flex;height:100vh;align-items:center;justify-content:center;flex-direction:column;text-align:center;padding:20px\"><h2>not found: " + new URLSearchParams(location.search).get("p") + "</h2><p>the page moved or the link is stale</p><a href=\"/p/" + PAGE_VER + "\"style=\"color:#6ea8fe;font-size:18px\">↩ go to the bridge</a>");
+  res.end("<!doctype html><meta charset=utf-8><title>404</title><body style=\"background:#0f1115;color:#e6e9ef;font:16px system-ui;display:flex;height:100vh;align-items:center;justify-content:center;flex-direction:column;text-align:center;padding:20px\"><h2>not found: " + String(new URL(req.url,"http://x").searchParams.get("p")==null?"":new URL(req.url,"http://x").searchParams.get("p")).replace(/["<>&]/g,"") + "</h2><p>the page moved or the link is stale</p><a href=\"/p/" + PAGE_VER + "\"style=\"color:#6ea8fe;font-size:18px\">↩ go to the bridge</a>");
 }
 
-const server = http.createServer(function(req, res){ handleApi(req, res, "http://x"); });
+const server = http.createServer(function(req, res){ accessLog(req, res); handleApi(req, res, "http://x"); });
+
+// access log (per-request): helps see what phones actually do when the UI is stuck
+const ACCESS_LOG = path.join(__dirname, "access.log");
+function accessLog(req, res) {
+  const u = req.url || "?";
+  const short = u.length > 80 ? u.slice(0, 77) + "..." : u; // strip tokens: log path + first param name only
+  const clean = (() => { try { const p = new URL(req.url, "http://x"); return p.pathname + (Object.keys(p.searchParams).length ? "?" + [...p.searchParams.keys()].join(",") : ""); } catch { return short; } })();
+  const t0 = Date.now();
+  let noted = false;
+  const origEnd = res.end.bind(res);
+  res.end = (...args) => {
+    if (!noted) { noted = true; try { fs.appendFileSync(ACCESS_LOG, `[${new Date().toISOString()}] ${req.socket.remoteAddress} ${req.method} ${clean} -> ${res.statusCode} ${Date.now() - t0}ms\n`); } catch {} }
+    return origEnd(...args);
+  };
+  res.on("close", () => { if (!noted) { noted = true; try { fs.appendFileSync(ACCESS_LOG, `[${new Date().toISOString()}] ${req.socket.remoteAddress} ${req.method} ${clean} -> ${res.statusCode ?? "?"} ${Date.now() - t0}ms (aborted)`); } catch {} } });
+}
 
 // Optional HTTPS (Web Push requires a secure origin). Bind if PIBRIDGE_CERT/KEY (files) are set.
 if (CERT && KEY) {
   try {
     const httpsServer = https.createServer(
       { cert: fs.readFileSync(CERT), key: fs.readFileSync(KEY) },
-      function(req, res){ handleApi(req, res, "https://x"); });
+      function(req, res){ accessLog(req, res); handleApi(req, res, "https://x"); });
     httpsServer.listen(HTTPS_PORT, "0.0.0.0", () => {
       console.log("[pibridge] HTTPS on :"+HTTPS_PORT+"  (Web Push enabled)");
     });

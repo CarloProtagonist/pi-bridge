@@ -4,3 +4,4 @@ node_modules/
 *.bak-*
 *.after-fix-*
 agent_backlog.md
+curl_response

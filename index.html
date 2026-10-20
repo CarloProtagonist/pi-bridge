@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#0f1115">
+<link rel="icon" href="data:,">
 <title>pi bridge</title>
 <style>
 :root{
@@ -150,7 +151,7 @@ button:disabled{opacity:.4;cursor:default}
 </div>
 <div id="toast"></div>
 <div id="auth" hidden><div class="card"><h3 style="margin:0 0 6px">pi bridge</h3><p style="color:var(--dim);font-size:13px">Enter token (on the machine: ~/.config/pibridge/token):</p><input id="token" type="password" autocomplete="off" placeholder="token"><button id="tokengo" style="width:100%">connect</button><p style="color:var(--err);font-size:12px;margin-top:8px" id="autherr"></p></div></div>
-<script id="boot">fetch("/app.bundle.js.sha256").then(r=>r.text()).then(xv=>{var s=document.createElement("script");s.src="/app.bundle.js?h="+xv.trim();window.BUNDLE=xv.trim();document.head.appendChild(s)}).catch(()=>{document.title="BOOT FAIL: cannot load app.js"})</script>
+<script id="boot">window.__BOOT_T0=Date.now();window.addEventListener("unhandledrejection",function(ev){try{fetch("/api/diag",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({ua:navigator.userAgent,probe:"unhandledrejection",msg:String(ev&&ev.reason).slice(0,200)})})}catch(e){}});fetch("/app.bundle.js.sha256").then(r=>r.text()).then(xv=>{var s=document.createElement("script");s.src="/app.bundle.js?h="+xv.trim();s.onerror=function(){try{fetch("/api/diag",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({ua:navigator.userAgent,probe:"bundle_load_fail",href:location.href,sr:screen.width+"x"+screen.height,bootMs:Date.now()-window.__BOOT_T0})})}catch(e){}};window.BUNDLE=xv.trim();document.head.appendChild(s)}).catch(function(e){try{fetch("/api/diag",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({ua:navigator.userAgent,probe:"hash_fetch_fail",msg:String(e).slice(0,200),href:location.href,sr:screen.width+"x"+screen.height,bootMs:Date.now()-window.__BOOT_T0})})}catch(_){}})</script>
 <div id="freshcan" hidden></div>
 </body>
 </html>
