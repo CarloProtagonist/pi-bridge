@@ -30,7 +30,7 @@ function buildTag() {
   } catch { return '?'; }
 }
 
-const PAGE_VER = 'C102';
+const PAGE_VER = 'C103';
 
 // Which path on the wire → which file in UI_DIR. null means "not a real file,
 // the handler synthesises the body".

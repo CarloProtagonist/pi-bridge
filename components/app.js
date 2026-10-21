@@ -9,7 +9,7 @@
   }catch(r){ try{window.__pbErr=r}catch(_){}}
 })();
 
-const BUILD="C99";
+const BUILD="C100";
 function toastMsg(m,ms=3000){toast.textContent=m;toast.classList.add("show");clearTimeout(toastMsg.t);toastMsg.t=setTimeout(()=>toast.classList.remove("show"),ms)}
 const $=s=>document.querySelector(s);
 let TOKEN=new URLSearchParams(location.search).get("token")||"",cursor=0,running=false,level=null,connected=false;
@@ -473,46 +473,39 @@ abBtn.addEventListener("click",async()=>{
  await api("/api/abort",{method:"POST"});addSys("stop requested");
 });
 // ---------------- auth + init ----------------
-// ---------------- web push (service worker + PushManager) ----------------
-function urlB64ToB64(s){ s = String(s).replace(/-/g,"+").replace(/_/g,"/"); while(s.length%4) s += "="; return s; }
+// ---------------- web push: permanently off as a *push* channel (user decision).
+// The button keeps one job: making sure the phone runs the QUIET service worker.
+// On load we fetch /sw.js, read its SW_REV, and if it differs from what was
+// registered, we wipe every registration and re-register — Chrome installs and
+// activates that build even without closing tabs (sw.js calls skipWaiting +
+// closes the old worker immediately on activate). Banners reach the phone via
+// the self-hosted ntfy server (port 3333) that the PC publishes to directly.
 let pushBtn = null;
 function ntfyHint(){
- toastMsg("tip: reliable fallback = any ntfy app subscribed to http://100.121.26.79:3333/ topic 'pibridge' (PC pushes there too)",8000);
+ toastMsg("web-push is off (banners disabled on request) — reliable channel: any ntfy app subscribed to http://100.121.26.79:3333/ topic 'pibridge' (the PC pushes there too)",10000);
 }
-function setPushOn(on){ if(pushBtn){ pushBtn.textContent = on ? "🔔✓" : "🔔"; pushBtn.title = on ? "notifications on" : "enable notifications"; } }
-async function enablePush(){
- if(!window.isSecureContext){ toastMsg("needs HTTPS — open via the https:// tailscale URL"); return; }
- if(!("Notification" in window)){ toastMsg("this browser has no Notifications API"); return; }
- if(!("serviceWorker" in navigator) || !("PushManager" in window)){ toastMsg("no Web Push support here"); return; }
+let swRev = null;
+async function readSwRev(){
  try{
-  let perm = Notification.permission;
-  if(perm !== "granted" && perm !== "denied") perm = await Notification.requestPermission();
-  if(perm !== "granted"){ toastMsg("notification permission not granted"); return ntfyHint(); }
-  const reg = await navigator.serviceWorker.register("/sw.js");
-  const vk = await (await fetch("/api/push/vapid-key")).json();
-  const appKey = Uint8Array.from(atob(urlB64ToB64(vk.publicKey)), c=>c.charCodeAt(0));
-  // Capture any prior push subscription first so we can unsubscribe it after
-  // re-subscribing. FCM rotates device push endpoints over time; if the old
-  // endpoint dies server-side we must drop it — POSTing only the new one
-  // would leave both registered, and a fanout that hits the dead one 410s
-  // until we eventually clean it up manually.
-  const prior = await reg.pushManager.getSubscription();
-  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: appKey });
-  if (prior && prior.endpoint !== sub.endpoint) { try{ await prior.unsubscribe(); }catch(_){} }
-  api("/api/push/subscribe", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(sub.toJSON()) })
-   .then(r=>{ if(r&&r.ok){ setPushOn(true); toastMsg("notifications enabled ✅"); } else { toastMsg("subscribe failed (HTTP "+r.status+")",6000); } });
- }catch(e){ toastMsg("push error: "+e.message); }
+  const t = await (await fetch("/sw.js", {cache:"no-store"})).text();
+  const m = t.match(/SW_REV\s*=\s*(\d+)/);
+  return m ? Number(m[1]) : null;
+ }catch(e){ return null; }
+}
+async function updateWorkerIfNeeded(){
+ if(!pushBtn || !("serviceWorker" in navigator) || location.protocol !== "https:") return;
+ const rev = await readSwRev();
+ if(rev == null) return;
+ if(swRev !== null && rev === swRev) return; // already on this build
+ swRev = rev;
+ await navigator.serviceWorker.getRegistrations().then(list=>Promise.all(list.map(r=>r.unregister()))).catch(()=>{});
+ await new Promise(res=>{ const id=setTimeout(res,4000); navigator.serviceWorker.register("/sw.js").then(res).catch(res); });
+ if(pushBtn) pushBtn.textContent = "\u{1F515}\u2713";
 }
 function initPushUI(){
  pushBtn = $("#pushbtn");
- if(pushBtn) pushBtn.addEventListener("click", enablePush);
- // reflect existing subscription state
- if("serviceWorker" in navigator && location.protocol === "https:" ){
-  navigator.serviceWorker.getRegistration().then(async r=>{
-   if(!r) return;
-   try{ const s = await r.pushManager.getSubscription(); if(s) setPushOn(true); }catch(e){}
-  }).catch(()=>{});
- }
+ if(pushBtn) pushBtn.addEventListener("click", ntfyHint);
+ updateWorkerIfNeeded();
 }
 initPushUI();
 

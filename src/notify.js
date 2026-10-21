@@ -18,7 +18,8 @@
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 const { CFG } = require('./config');
-const { webPushNotify } = require('./push.js');
+// NOTE: web push is intentionally NOT wired into addNotif() (banners are off);
+// the push module is still required by index.js for subscription hygiene endpoints.
 
 // Every external child process this process has ever spawned (ntfy curl).
 // Used as a weak set: the handler removes itself on "exit", so this only ever
@@ -60,7 +61,11 @@ function ntfy(title, text) {
   }
 }
 
-/** Add one notification to every channel (UI ring + ntfy + web push). */
+/** Add one notification to every channel (UI ring + ntfy).
+ *  Web Push is permanently OFF (user decision): no FCM fan-out here. Stale
+ *  service workers on phones still registered from old builds would have
+ *  shown banners for every push we sent, so the channel is cut at the head.
+ *  Pushes are delivered to the phone via ntfy instead. */
 function addNotif(title, text) {
   NOTIFS.push({
     at: Date.now(),
@@ -69,7 +74,6 @@ function addNotif(title, text) {
   });
   if (NOTIFS.length > NOTIF_MAX) NOTIFS.splice(0, NOTIFS.length - NOTIF_MAX);
   ntfy(title, text);
-  webPushNotify(title, text);
 }
 
 /**

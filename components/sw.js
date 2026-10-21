@@ -10,6 +10,9 @@
  * left intact and inert: pushes keep arriving here and are thrown away.
  */
 
+// Marker the page compares against to detect a pre-quiet-build worker.
+const SW_REV = 2;
+
 // Deliberately does NOT call registration.showNotification().
 self.addEventListener("push", () => {});
 
@@ -36,12 +39,14 @@ addEventListener("pushsubscriptionchange", async (event) => {
 // worker left on screen / in the tray.
 self.addEventListener("activate", (event) => {
   event.waitUntil((async () => {
-    try {
-      const list = await self.registration.getNotifications();
-      for (const n of list) n.close();
-    } catch {}
+    try { self.clients.claim(); } catch {}
+    try { const list = await self.registration.getNotifications(); for (const n of list) n.close(); } catch {}
   })());
 });
+
+// This worker replaces the old notifying build as soon as it installs —
+// no need to wait for tabs to close.
+self.addEventListener("install", (e) => { self.skipWaiting(); });
 
 // Nothing to click (no notifications are shown), but keep a no-op handler so
 // old in-flight notifications from previous builds don't error.
