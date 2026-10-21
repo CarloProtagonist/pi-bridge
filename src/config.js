@@ -54,6 +54,9 @@ const CFG = {
   vapidFile: path.join(HOME, '.config', 'pibridge', 'vapid.json'),
   subsFile: path.join(HOME, '.config/pibridge/push-subscriptions.json'),
   templatesFile: path.join(HOME, '.config/pibridge/templates.json'),
+
+  // User-editable prompt templates (one .md each), copied into new sessions.
+  templatesDir: process.env.PIBRIDGE_TEMPLATES_DIR || path.join(HOME, '.config/pibridge/templates'),
   accessLog: path.join(__dirname, '..', 'access.log'),
   diagLog: path.join(__dirname, '..', 'diag.log'),
   rpcLog: path.join(__dirname, '..', 'rpc.log'),
@@ -61,7 +64,10 @@ const CFG = {
   // Where `pi` keeps its session transcripts (`.jsonl`). Follow mode tails the
   // newest one and pushes a notification whenever the PC agent starts/finishes
   // a turn.
-  sessionsDir: path.join(HOME, '.pi', 'agent', 'sessions'),
+  // Where `pi` keeps its session transcripts (`.jsonl`). Follow mode tails the
+ // newest one and pushes a notification whenever the PC agent starts/finishes
+ // a turn. Overridden by PIBRIDGE_SESSIONS_DIR (isolated instances / tests).
+  sessionsDir: process.env.PIBRIDGE_SESSIONS_DIR || path.join(HOME, '.pi', 'agent', 'sessions'),
 
   // Optional HTTPS (Web Push requires a secure origin). Provide PEM files via
   // env; when absent the bridge serves plain HTTP and push is unavailable.

@@ -147,6 +147,14 @@ async function handleSend(req, res, ctx) {
   const message = String(body.message || '').trim();
   if (!message) return sendJson(res, 400, { error: 'empty message' });
   const behavior = body.behavior === 'followUp' ? 'followUp' : 'steer';
+  // Per-project new session: prepend a one-shot context line to the FIRST
+  // message so the agent knows which project it is in. `pendingProject` is
+  // cleared after use so it does not leak into later turns.
+  let msg = message;
+  if (agent.pendingProject) {
+    msg = '[context] working in project: ' + agent.pendingProject + '\n' + message;
+    delete agent.pendingProject;
+  }
   // New-conversation heuristic: when we've sent no messages and the agent
   // hasn't been given a name yet, turn the first user prompt into the session
   // title (same thing the desktop UI does).
@@ -155,7 +163,7 @@ async function handleSend(req, res, ctx) {
     if (name) agent.sendRpc('set_session_name', { name }).catch(() => {});
   }
   try {
-    const r = await agent.sendRpc('prompt', { message, streamingBehavior: behavior });
+    const r = await agent.sendRpc('prompt', { message: msg, streamingBehavior: behavior });
     sendJson(res, 200, { ok: true, disposition: (r.data && r.data.disposition) || 'started' });
   } catch (e) {
     sendJson(res, 500, { error: String(e.message || e) });
@@ -171,13 +179,28 @@ const postAbort = async (req, res, ctx) => {
   }
 };
 
+const labelOf = (d) => { try { return String(d).split('/').filter(Boolean).slice(-1)[0] || d; } catch { return d; } };
 const postNewSession = async (req, res, ctx) => {
+  // Optional { project: '<encoded dir or real path>' } — start the session in
+  // that project's context. pi's `new_session` RPC has no cwd argument, so we
+  // can't move the agent's working dir; instead we record the project and seed
+  // a short preamble so the agent knows which project it is working in.
+  let projectDir = null;
+  try {
+    const raw = await readBody(req);
+    if (raw) { const o = JSON.parse(raw); if (o && o.project) projectDir = S.agentResolveProject(String(o.project)); }
+  } catch {}
+  if (ctx.agent.isStreaming)
+    return sendJson(res, 409, { error: 'agent is in the middle of a turn. Wait for it to finish, then try again.' });
   try {
     await ctx.agent.sendRpc('new_session', {}, 15000);
     ctx.agent.state.messageCount = 0;
     ctx.agent.state.sessionName = null;
+    if (projectDir) ctx.agent.pendingProject = projectDir; // flushed on first send
+    if (ctx.follow && ctx.follow.isOn()) { try { ctx.follow.stop(); } catch {} }
     ctx.agent.applyGetState();
-    sendJson(res, 200, { ok: true });
+    ctx.agent.broadcast({ type: 'system', note: 'new session' + (projectDir ? ' in ' + labelOf(projectDir) : '') });
+    sendJson(res, 200, { ok: true, project: projectDir || null });
   } catch (e) {
     sendJson(res, 500, { error: String(e.message || e) });
   }
@@ -246,6 +269,10 @@ async function handleApi(req, res, baseUrl, ctx) {
   }
 
   // ---- synthetic static endpoints (see src/static.js)
+  if (p === '/bundle.meta') {
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    return res.end(require('./static.js').bundleMeta());
+  }
   if (p === '/app.bundle.js.sha256') {
     res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-store' });
     return res.end(bundleSha());
@@ -310,21 +337,40 @@ async function handleApi(req, res, baseUrl, ctx) {
         } catch {
           return sendJson(res, 400, { error: 'bad json' });
         }
-        if (b.delete) {
-          const rel = String(b.delete || '');
-          const full = S.resolveSession(rel);
-          if (!full) return sendJson(res, 400, { error: 'bad session file' });
-          if (ctx.agent.state.sessionId && rel.endsWith('_' + ctx.agent.state.sessionId + '.jsonl'))
-            return sendJson(res, 400, { error: 'cannot delete the session the agent is currently in' });
-          if (ctx.follow.follow.on && ctx.follow.follow.file === rel)
-            ctx.follow.stopFollow('session deleted from phone');
-          try {
-            fs.unlinkSync(full);
-            console.error('[pibridge] deleted session file: ' + rel);
-            sendJson(res, 200, { ok: true, deleted: rel });
-          } catch (e) {
-            sendJson(res, 500, { error: String(e.message || e) });
+        let files = Array.isArray(b.delete) ? b.delete : (b.delete ? [b.delete] : null);
+        if (b.move && b.move.to) {
+          // Move one or more session files into a different (project) group.
+          const froms = Array.isArray(b.move.from) ? b.move.from : [b.move.from];
+          const to = String(b.move.to);
+          const moved = [];
+          const errors = [];
+          for (const rel of froms) {
+            const r = String(rel);
+            try {
+              const m = S.moveSession(r, to);
+              moved.push(m.to);
+              if (ctx.follow.follow.on && ctx.follow.follow.file === r) ctx.follow.stopFollow('session moved from phone');
+            } catch (e) { errors.push(r + ' (' + e.message + ')'); }
           }
+          sendJson(res, 200, { ok: true, moved, errors });
+          return;
+        }
+        if (files) {
+          const activeRel =
+            ctx.agent.state.sessionId &&
+            S.filenameForSessionId(ctx.agent.state.sessionId);
+          let deleted = [];
+          const errors = [];
+          for (const rel of files) {
+            const r = String(rel);
+            const full = S.resolveSession(r);
+            if (!full) { errors.push(r); continue; }
+            if (activeRel && full.endsWith('_' + ctx.agent.state.sessionId + '.jsonl')) { errors.push(r + ' (active)'); continue; }
+            if (ctx.follow.follow.on && ctx.follow.follow.file === r) ctx.follow.stopFollow('session deleted from phone');
+            try { fs.unlinkSync(full); deleted.push(r); } catch (e) { errors.push(r + ' (' + e.message + ')'); }
+          }
+          if (deleted.length) console.error('[pibridge] deleted ' + deleted.length + ' session file(s)');
+          sendJson(res, 200, { ok: true, deleted, errors });
           return;
         }
         if (b.follow) {
@@ -344,6 +390,41 @@ async function handleApi(req, res, baseUrl, ctx) {
     sendJson(res, 200, { follow: ctx.follow.publicFollow(), sessions: S.readHead() });
     return;
   }
+
+  // ---- reusable prompt templates (one-shot, distinct from the static agent-file
+  // templates above). Stored as ~/.config/pibridge/templates/<name>.md.
+  if (p === '/api/prompt-templates') {
+    if (req.method === 'POST') {
+      return readBody(req).then((t) => {
+        let b = {};
+        try { b = JSON.parse(t || '{}'); } catch {
+          return sendJson(res, 400, { error: 'bad json' });
+        }
+        if (b.delete) {
+          let err = null;
+          try { S.deletePromptTemplate(String(b.delete)); } catch (e) { err = String(e.message || e); }
+          return sendJson(res, err ? 400 : 200, err ? { error: err } : { ok: true });
+        }
+        const name = String(b.name || '');
+        if (!name) return sendJson(res, 400, { error: 'name required' });
+        if (typeof b.body !== 'string') return sendJson(res, 400, { error: 'body required (string)' });
+        let err = null;
+        try { S.savePromptTemplate(name, b.body); } catch (e) { err = String(e.message || e); }
+        if (err)
+          return sendJson(res, 400, { error: err });
+        sendJson(res, 200, { ok: true, names: S.listPromptTemplates() });
+      });
+    }
+    sendJson(res, 200, { names: S.listPromptTemplates() });
+    return;
+  }
+  if (p === '/api/prompt-template') {
+    const name = url.searchParams.get('name');
+    const body = S.getPromptTemplate(name);
+    if (body === null) return sendJson(res, 404, { error: 'no such template' });
+    sendJson(res, 200, { name, body });
+    return;
+  }
   if (p === '/api/session-view') {
     const rel = url.searchParams.get('file');
     const msgs = S.parseSessionMessages(rel);
@@ -351,6 +432,7 @@ async function handleApi(req, res, baseUrl, ctx) {
     const meta = S.readHead().find((x) => x.file === rel) || {};
     sendJson(res, 200, {
       file: rel,
+      dir: meta.dir || null,
       project: meta.project || null,
       title: meta.title || null,
       messages: msgs,

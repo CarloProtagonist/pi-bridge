@@ -18,6 +18,107 @@ const path = require('node:path');
 const { CFG } = require('./config.js');
 
 const SESSIONS_DIR = CFG.sessionsDir;
+const TEMPLATES_DIR = CFG.templatesDir;
+
+/**
+ * The real working directory for one *encoded* pi session dir, read from the
+ * `cwd` field of the first line of its first .jsonl (the authoritative source
+ * — the dir-name encoding is lossy). null = cannot prove it's a directory / no
+ * such project. Used to back "{project}" new-session and to label groups.
+ *
+ * `sessionsDir` is overridable for tests (defaults to CFG.sessionsDir).
+ */
+function agentResolveProject(dirName, sessionsDir) {
+  const base = sessionsDir || SESSIONS_DIR;
+  // dirName may be a bare encoded dir-name OR a full absolute path; we only
+  // use its LAST path segment, which must be a non-dotted, non-empty basename
+  // (so it can never be "."/".." or carry a separator).
+  const seg = String(dirName || '').split('/').filter(Boolean).pop();
+  if (!seg || seg === '.' || seg === '..' || seg.startsWith('.')) return null;
+  const dd = path.join(base, seg);
+  let files = [];
+  try { files = fs.readdirSync(dd).filter((f) => f.endsWith('.jsonl')).sort(); } catch { return null; }
+  for (const f of files) {
+    try {
+      const buf = Buffer.alloc(2048);
+      const fd = fs.openSync(path.join(dd, f), 'r');
+      fs.readSync(fd, buf, 0, buf.length, 0);
+      fs.closeSync(fd);
+      try {
+        const o = JSON.parse(buf.toString('utf8').slice(0, 4000).split('\n')[0]);
+        if (o && o.cwd) {
+          try { if (fs.statSync(o.cwd).isDirectory()) return o.cwd; } catch {}
+          return null;
+        }
+      } catch {}
+    } catch {}
+  }
+  return null;
+}
+
+/**
+ * Move one session file to a different project (group) directory. This is how
+ * "move between groups" is implemented: pi keys a session's project by the
+ * directory the .jsonl lives in, so moving the file between project dirs moves
+ * it between groups. Pure file op, guarded so the target stays under the
+ * sessions dir and the file actually exists first.
+ *
+ * Returns { ok:true, from, to } or throws a descriptive Error.
+ */
+function moveSession(fromRel, toDir, sessionsDir) {
+  const base = sessionsDir || SESSIONS_DIR;
+  const from = resolveSession(fromRel, base);
+  if (!from) throw new Error('source session not found: ' + fromRel);
+  if (typeof toDir !== 'string' || !toDir) throw new Error('bad target dir');
+  const toSeg = toDir.split('/').filter(Boolean).pop();
+  if (!toSeg || toSeg === '.' || toSeg === '..' || toSeg.startsWith('.')) throw new Error('bad target dir');
+  const toDirFull = path.join(base, toSeg);
+  if (!toDirFull.startsWith(base + path.sep)) throw new Error('bad target dir');
+  fs.mkdirSync(toDirFull, { recursive: true });
+  const to = path.join(toDirFull, path.basename(from));
+  if (to === from) return { ok: true, from: fromRel, to: fromRel, noop: true };
+  fs.renameSync(from, to);
+  return { ok: true, from: fromRel, to: toSeg + '/' + path.basename(from) };
+}
+
+// ================================================== reusable prompt templates
+/** List the user's reusable prompt templates (one .md each, sorted). */
+function listPromptTemplates(templatesDir) {
+  try {
+    return fs.readdirSync(templatesDir || TEMPLATES_DIR).filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3)).sort();
+  } catch { return []; }
+}
+
+/** Read one template by name, or null. Path-traversal guarded by name. */
+function getPromptTemplate(name, templatesDir) {
+  const base = templatesDir || TEMPLATES_DIR;
+  const n = String(name || '');
+  if (!/^[A-Za-z0-9._-]{1,120}$/.test(n)) return null;
+  try { return fs.readFileSync(path.join(base, n + '.md'), 'utf8'); } catch { return null; }
+}
+
+/** Persist one template. Rejects names that could escape the templates dir. */
+function savePromptTemplate(name, body, templatesDir) {
+  const base = templatesDir || TEMPLATES_DIR;
+  const n = String(name || '');
+  if (!/^[A-Za-z0-9._-]{1,120}$/.test(n)) throw new Error('bad template name');
+  fs.mkdirSync(base, { recursive: true });
+  const fp = path.join(base, n + '.md');
+  if (!fp.startsWith(path.resolve(base) + path.sep)) throw new Error('bad template name');
+  fs.writeFileSync(fp, String(body));
+  return n;
+}
+
+/** Delete a template (idempotent). */
+function deletePromptTemplate(name, templatesDir) {
+  const base = templatesDir || TEMPLATES_DIR;
+  const n = String(name || '');
+  if (!/^[A-Za-z0-9._-]{1,120}$/.test(n)) throw new Error('bad template name');
+  const fp = path.join(base, n + '.md');
+  if (!fp.startsWith(path.resolve(base) + path.sep)) throw new Error('bad template name');
+  try { fs.unlinkSync(fp); } catch {}
+  return n;
+}
 
 /**
  * Map a session UUID to a "<projectDir>/<file>.jsonl" relative path by scanning
@@ -51,12 +152,14 @@ function decodeProject(d) {
  * Guarded path join: "projectDir/file.jsonl" → absolute path under
  * SESSIONS_DIR, or null if it would escape (any ".." segment), if the target
  * doesn't exist, or if it isn't a regular file.
+ * `sessionsDir` is overridable for tests (defaults to CFG.sessionsDir).
  */
-function resolveSession(rel) {
+function resolveSession(rel, sessionsDir) {
   if (!rel || rel.includes('..')) return null;
+  const base = sessionsDir || SESSIONS_DIR;
   const clean = String(rel).replace(/^\/+/, '');
-  const full = path.join(SESSIONS_DIR, clean);
-  if (!full.startsWith(SESSIONS_DIR + path.sep)) return null;
+  const full = path.join(base, clean);
+  if (!full.startsWith(base + path.sep)) return null;
   try { if (!fs.statSync(full).isFile()) return null; } catch { return null; }
   return full;
 }
@@ -86,18 +189,25 @@ function titleOfFile(full) {
 /**
  * Per-project session metadata for the "Sessions" tab:
  *   [{ file, project, title, size, mtime, firstTs }]  (newest mtime first)
+ * `sessionsDir` is overridable for tests (defaults to CFG.sessionsDir).
  */
-function readHead() {
+function readHead(sessionsDir) {
+  const base = sessionsDir || SESSIONS_DIR;
   const out = [];
   let dirs = [];
-  try { dirs = fs.readdirSync(SESSIONS_DIR); } catch { return out; }
+  try { dirs = fs.readdirSync(base); } catch { return out; }
   for (const d of dirs) {
     const proj = decodeProject(d);
     let files = [];
-    try { files = fs.readdirSync(path.join(SESSIONS_DIR, d)); } catch { continue; }
+    try { files = fs.readdirSync(path.join(base, d)); } catch { continue; }
+    // Sort newest-first so within-group ordering survives the client-side
+    // grouping (per-project Maps key off the first time we see them, which is
+    // driven by this list's order). Without this the OS readdir order leaks
+    // through and sessions appear out of order within their project.
+    files.sort().reverse();
     for (const f of files) {
       if (!/\d{4}-\d{2}-\d{2}T.*\.jsonl$/.test(f)) continue;
-      const full = path.join(SESSIONS_DIR, d, f);
+      const full = path.join(base, d, f);
       let st;
       try { st = fs.statSync(full); } catch { continue; }
       let title = null,
@@ -120,9 +230,9 @@ function readHead() {
             }
           }
         }
-      } catch {}
-      out.push({
+      } catch {} out.push({
         file: d + '/' + f,
+        dir: d,
         project: proj,
         title: title || '(no content yet)',
         size: st.size,
@@ -186,8 +296,8 @@ function iterMessages(chunk, cb) {
  * to o.maxMsgs of them, default 250). Reading a bounded window — not the whole
  * file — is what keeps opening a multi-GB session O(1).
  */
-function parseSessionMessages(rel, o = {}) {
-  const full = resolveSession(rel);
+function parseSessionMessages(rel, o = {}, sessionsDir) {
+  const full = resolveSession(rel, sessionsDir);
   if (!full) return null;
   const MAX = 4 * 1024 * 1024;
   const sz = fs.statSync(full).size;
@@ -249,13 +359,23 @@ function scanDepth(full) {
   return Math.max(0, users - atext);
 }
 
+// readHead() groups its output per-project below (see handlers) — but the raw
+// flat, mtime-desc list is still exported for tests and simple consumers.
+
 module.exports = {
   SESSIONS_DIR,
+  templatesDir: TEMPLATES_DIR,
   filenameForSessionId,
   decodeProject,
   resolveSession,
   titleOfFile,
   readHead,
+  agentResolveProject,
+  moveSession,
+  listPromptTemplates,
+  getPromptTemplate,
+  savePromptTemplate,
+  deletePromptTemplate,
   iterMessages,
   parseSessionMessages,
   scanDepth,

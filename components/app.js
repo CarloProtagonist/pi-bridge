@@ -9,7 +9,7 @@
   }catch(r){ try{window.__pbErr=r}catch(_){}}
 })();
 
-const BUILD="C97";
+const BUILD="C99";
 function toastMsg(m,ms=3000){toast.textContent=m;toast.classList.add("show");clearTimeout(toastMsg.t);toastMsg.t=setTimeout(()=>toast.classList.remove("show"),ms)}
 const $=s=>document.querySelector(s);
 let TOKEN=new URLSearchParams(location.search).get("token")||"",cursor=0,running=false,level=null,connected=false;
@@ -245,7 +245,7 @@ async function reasyncNow(){ // mobile browsers freeze timers/sockets in backgro
 document.addEventListener("visibilitychange",()=>{ if(!document.hidden){ reasyncNow(); } });
 window.addEventListener("pageshow",(e)=>{ if(e.persisted||!document.hidden){ reasyncNow(); } });
 // ---------------- notifications ----------------
-let seenNotifs=0,notifBox=null,badge=null;
+let seenNotifs=0,notifBox=null,badge=null,notifCount=0;
 async function apiNotify(drainMs){ /* server long-polls; returns [] on wait-timeout */
   try{const t=await api("/api/notify?timeout="+drainMs);return Array.isArray(t)?t:[]}catch(e){return []}
 }
@@ -254,14 +254,11 @@ async function drainNotifs(){
   toastMsg("too many pending notifications – refreshed");
 }
 function pushNotif(x){
+  // in-page toasts were removed (they pile up and take over the chat view);
+  // phone web-push is the notification channel — here we only track unread count for the badge
   seenNotifs=Math.max(seenNotifs,x.at||0);
-  const item=el("div","notif");
-  item.appendChild(el("div","t",x.title||""));
-  if(x.text)item.appendChild(el("div","x",x.text));
-  item.onclick=()=>{switchTab("sess");item.remove()};
-  notifBox.prepend(item);
-  const count=notifBox.children.length;
-  if(badge){badge.hidden=!count;badge.textContent=String(count)}
+  notifCount++;
+  if(badge){badge.hidden=!notifCount;badge.textContent=String(notifCount)}
 }
 async function pollNotifs(){
   let seeded=false;
@@ -283,18 +280,15 @@ function currentView(){
  return "chat";
 }
 function _safe(el,fn){try{if(el)fn(el)}catch(e){console.error("guard:",e)}}
-function switchTab(v){
+function switchTab(v){ // top-level helpers for the unread badge (defined here, not inside doInit)
+function resetNotifBadge(){notifCount=0;if(badge)badge.hidden=true}
  const views={chat:$("#v-chat"),sess:$("#v-sess"),mview:$("#v-mview")};
  let bad=Object.keys(views).filter(k=>!views[k]);
  if(bad.length){toastMsg("UI out of sync (missing "+bad.join(",").replace("#","")+") — reloading page",6000);location.reload();return}
  for(const k in views)views[k].hidden=(k!==v);
  $("#tab-chat").classList.toggle("act",v==="chat");
  $("#tab-sess").classList.toggle("act",v==="sess"||v==="mview");
- if(v==="sess"){
-  if(notifBox)notifBox.innerHTML="";
-  if(badge)badge.hidden=true;
-  loadSessions();
- } else if(v==="chat"){renderMirror();if(!running&&pendingResume){const f=pendingResume;pendingResume=null;refreshChat(f);}}
+ if(v==="sess"){resetNotifBadge();loadSessions();} else if(v==="chat"){renderMirror();if(!running&&pendingResume){const f=pendingResume;pendingResume=null;refreshChat(f);}}
  scrollBottom();
 }
 $("#tab-chat").addEventListener("click",()=>switchTab("chat"));
@@ -537,8 +531,8 @@ function doInit(){
  // "clear data on exit"), the plain refresh keeps working because the URL still carries it.
  if(urlTok){try{if(localStorage.getItem("pibridge_token")===urlTok){history.replaceState(null,"","/");}}catch(e){}}
  else{try{history.replaceState(null,"","/")||0}catch(e){location.hash="";history.replaceState(null,"","/")}}
- notifBox=$("#notifs");
- badge=$("#badge");
+notifBox=$("#notifs");
+badge=$("#badge");
  fetchState().then(async(ok)=>{
   if(!ok){ if(!auth.hidden)return; setConnFail(new Error("connect failed")); return; }
   addSys("connected · build "+BUILD);

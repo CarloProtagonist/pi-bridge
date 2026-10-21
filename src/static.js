@@ -19,7 +19,18 @@ const crypto = require('node:crypto');
 
 const UI_DIR = path.join(__dirname, '..', 'components');
 
-const PAGE_VER = 'C98';
+// Extract the build tag the UI prints (const BUILD="…") so a phone can compare
+// the version of the bundle it actually loaded against the one on disk and
+// auto-update when they diverge. Returns "?" if it cannot be found.
+function buildTag() {
+  try {
+    const src = fs.readFileSync(path.join(UI_DIR, 'app.js'), 'utf8');
+    const m = src.match(/\bBUILD\s*=\s*"([^"]+)"/);
+    return m ? m[1] : '?';
+  } catch { return '?'; }
+}
+
+const PAGE_VER = 'C102';
 
 // Which path on the wire → which file in UI_DIR. null means "not a real file,
 // the handler synthesises the body".
@@ -45,4 +56,11 @@ function bundleSha() {
     .slice(0, 16);
 }
 
-module.exports = { PAGE_VER, ROUTES, staticRouteMap, bundleSha, UI_DIR };
+// Small, no-cache JSON the UI fetches on load: {build, sha}. The phone compares
+// against its own BUILD and the sha the HTML injected; a mismatch means the page
+// was started from an old service-worker cache and should hard-reload.
+function bundleMeta() {
+  return JSON.stringify({ build: buildTag(), sha: bundleSha(), pageVer: PAGE_VER });
+}
+
+module.exports = { PAGE_VER, buildTag, ROUTES, staticRouteMap, bundleSha, bundleMeta, UI_DIR };

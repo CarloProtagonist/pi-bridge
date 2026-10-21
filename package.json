@@ -5,7 +5,8 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node server.js",
-    "smoke": "node -e \"require('./src/index.js')\""
+    "smoke": "node -e \"require('./src/index.js')\"",
+    "test": "node --test"
   },
   "keywords": ["pi", "agent", "webpush", "selfhosted", "tailscale"],
   "author": "CarloCaruso97",
