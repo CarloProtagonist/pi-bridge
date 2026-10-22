@@ -163,6 +163,12 @@ async function handleSend(req, res, ctx) {
     if (name) agent.sendRpc('set_session_name', { name }).catch(() => {});
   }
   try {
+    // GPU arbitration (approach A): claim the shared GPU for this side NOW,
+    // so the conscience-serve manager — the sole arbiter — sees pi-bridge as
+    // the newest owner and yields VRAM to the Ollama model this prompt loads.
+    // Best-effort and non-blocking (it just stamps a file); a failure here
+    // must never cost the user their prompt.
+    require('./gpu.js').claimGpu();
     const r = await agent.sendRpc('prompt', { message: msg, streamingBehavior: behavior });
     sendJson(res, 200, { ok: true, disposition: (r.data && r.data.disposition) || 'started' });
   } catch (e) {
