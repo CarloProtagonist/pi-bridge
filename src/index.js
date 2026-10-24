@@ -46,6 +46,10 @@ function main() {
     sessionsTitle: (file) => S.titleOfFile(S.resolveSession(file)),
     filenameForSessionId: S.filenameForSessionId,
     autoFollow: (sid) => followCtl.autoFollow(sid),
+    // One "ready for your input" nudge when the model goes idle. This is the
+    // only notification the 2026-10-21 spec keeps (no "working" dings).
+    // addNotif still feeds the open-UI ring; the ntfy banner respects prefs.
+    onSettled: (title, text) => N.addNotif(title, text),
   });
 
   // Keep the "needs your input" watcher pointed at whichever transcript pi is

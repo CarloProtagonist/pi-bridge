@@ -179,15 +179,16 @@ function createFollow({ onNotif, filenameForSessionId }) {
     const before = follow.depth;
     follow.depth = Math.max(0, follow.depth + userNew - asstText);
 
-    if (userNew && before === 0 && !follow.busy) {
-      follow.busy = true;
-      onNotif('pi (PC) → working', 'New prompt: ' + (lastUser || '').slice(0, 150));
-    }
-    if (follow.busy && before > 0 && follow.depth === 0 && asstText) {
-      const done = follow.ongoing; // ongoing=true → keep watching the next turn
+    // Notifications are intentionally NOT fired here. Per the 2026-10-21 spec the
+    // only push is "model went idle / turn complete", which is detected reliably in
+    // src/agent.js from the live RPC `isStreaming` flag (file-based depth is not —
+    // see scanDepth note in sessions.js). `before` is kept only to power the
+    // one-shot auto-stop below.
+    if (userNew && before === 0) follow.busy = true;
+    if (follow.busy && before > 0 && follow.depth === 0) {
+      const keepWatching = follow.ongoing;
       follow.busy = false;
-      onNotif('pi (PC) → needs your input', follow.lastReply.slice(0, 220));
-      if (!done) stopFollow(); // one-shot: follow was for a single turn
+      if (!keepWatching) stopFollow(); // one-shot: follow was for a single turn
     }
   }
 

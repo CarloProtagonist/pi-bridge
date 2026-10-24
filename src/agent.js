@@ -34,8 +34,12 @@ const fs = require('node:fs');
  *   deps.filenameForSessionId(id) — id → "<proj>/<file>.jsonl" | null
  *   deps.autoFollow() — called on every RPC event; lets index.js re-point
  *                       follow at the new active transcript
+ *   deps.onSettled(title, text) — called once, when the model goes idle (was
+ *                       streaming, now not). This is the reliable
+ *                       "turn complete → ready for your input" signal and is
+ *                       used for the phone push (per the 2026-10-21 spec).
  */
-function createAgent({ follow, sessionsTitle, filenameForSessionId, autoFollow }) {
+function createAgent({ follow, sessionsTitle, filenameForSessionId, autoFollow, onSettled }) {
   let proc = null;
   let lineBuf = '';
   let seq = 0;
@@ -53,6 +57,17 @@ function createAgent({ follow, sessionsTitle, filenameForSessionId, autoFollow }
   const rpcWaiters = new Map();
   const pollers = new Set();
 
+  // Single chokepoint for the "working" flag. Fires onSettled() exactly once,
+  // on a streaming→idle transition (the only reliable "needs your input" signal;
+  // file-based depth is unreliable — see sessions.js scanDepth notes).
+  function setStreaming(v) {
+    v = !!v;
+    if (streaming && !v) {
+      try { onSettled && onSettled('turn complete — ready for your input'); } catch {}
+    }
+    streaming = v;
+  }
+
   // ------------------------------------------------------------- public state
   const publicState = () => ({
     agentUp: !!(proc && proc.exitCode === null),
@@ -64,6 +79,7 @@ function createAgent({ follow, sessionsTitle, filenameForSessionId, autoFollow }
     sessionId: state.sessionId,
     followOn: follow.on,
     followFile: follow.on ? follow.file : null,
+    streaming,           // live "working" flag straight from the pi RPC (authoritative)
     followBusy: !!follow.busy,
     followProject: follow.proj || null,
     followName: (function () {
@@ -104,7 +120,7 @@ function createAgent({ follow, sessionsTitle, filenameForSessionId, autoFollow }
 
   function applyStateData(d) {
     if (!d) return;
-    streaming = !!d.isStreaming;
+    setStreaming(!!d.isStreaming);
     compaction = !!d.isCompacting;
     state.sessionId = d.sessionId || state.sessionId;
     state.model = d.model ? `${d.model.provider}/${d.model.id}` : state.model;
@@ -130,9 +146,10 @@ function createAgent({ follow, sessionsTitle, filenameForSessionId, autoFollow }
       }
       return;
     }
-    if (rec.type === 'agent_start') streaming = true;
-    else if (rec.type === 'agent_settled') {
-      streaming = false;
+    if (rec.type === 'agent_start') {
+      setStreaming(true);
+    } else if (rec.type === 'agent_settled') {
+      setStreaming(false);
       applyGetState();
     } else if (rec.type === 'compaction_start') compaction = true;
     else if (rec.type === 'compaction_end') {

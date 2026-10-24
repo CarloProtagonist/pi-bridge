@@ -519,6 +519,17 @@ async function handleApi(req, res, baseUrl, ctx) {
   }
 
   // ---- notifications
+  if (p === '/api/notify-prefs') {
+    if (req.method === 'POST') {
+      return (async () => {
+        let parsed = {};
+        try { parsed = JSON.parse((await readBody(req)) || '{}'); } catch {}
+        const res2 = ctx.notify.setPrefs({ phone: !!parsed.phone, inpage: !!parsed.inpage });
+        return sendJson(res, 200, { ok: true, prefs: res2 });
+      })();
+    }
+    return sendJson(res, 200, { prefs: ctx.notify.getPrefs() });
+  }
   if (p === '/api/test-notify' && req.method === 'GET') {
     ctx.notify.addNotif(
       'pi (PC) → test notification',
